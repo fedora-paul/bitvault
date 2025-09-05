@@ -349,3 +349,77 @@
     (ok true)
   )
 )
+
+;; Claim Staking Rewards - Distribute accumulated yield to NFT owner
+(define-private (claim-yield-rewards (token-id uint))
+  (let (
+      (reward-amount (unwrap! (calculate-pending-rewards token-id) ERR_NOT_STAKED))
+      (token-data (unwrap! (map-get? nft-registry { token-id: token-id }) ERR_INVALID_TOKEN))
+      (yield-data (unwrap! (map-get? yield-tracker { token-id: token-id }) ERR_NOT_STAKED))
+    )
+    (asserts! (get is-staked token-data) ERR_NOT_STAKED)
+
+    ;; Reset yield accumulation
+    (map-set yield-tracker { token-id: token-id }
+      (merge yield-data {
+        accumulated-rewards: u0,
+        last-claim-height: stacks-block-height,
+        total-distributed: (+ (get total-distributed yield-data) reward-amount),
+      })
+    )
+
+    ;; Distribute rewards from protocol treasury
+    (as-contract (stx-transfer? reward-amount (as-contract tx-sender) (get owner token-data)))
+  )
+)
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Get NFT Information - Comprehensive asset details
+(define-read-only (get-nft-details (token-id uint))
+  (map-get? nft-registry { token-id: token-id })
+)
+
+;; Get Marketplace Listing - Trading information lookup
+(define-read-only (get-listing-details (token-id uint))
+  (map-get? marketplace-listings { token-id: token-id })
+)
+
+;; Get Fractional Holdings - Share ownership details
+(define-read-only (get-share-balance
+    (token-id uint)
+    (holder principal)
+  )
+  (map-get? ownership-ledger {
+    token-id: token-id,
+    holder: holder,
+  })
+)
+
+;; Get Yield Information - Staking rewards tracking
+(define-read-only (get-yield-status (token-id uint))
+  (map-get? yield-tracker { token-id: token-id })
+)
+
+;; Calculate Pending Rewards - Real-time yield computation
+(define-read-only (calculate-pending-rewards (token-id uint))
+  (let (
+      (token-data (unwrap! (map-get? nft-registry { token-id: token-id }) ERR_INVALID_TOKEN))
+      (yield-data (unwrap! (map-get? yield-tracker { token-id: token-id }) ERR_NOT_STAKED))
+      (blocks-staked (- stacks-block-height (get stake-height token-data)))
+      (yield-per-block (/ YIELD_RATE BLOCKS_PER_YEAR))
+      (new-rewards (* blocks-staked yield-per-block))
+    )
+    (ok (+ (get accumulated-rewards yield-data) new-rewards))
+  )
+)
+
+;; Get Protocol Statistics - Global protocol metrics
+(define-read-only (get-protocol-stats)
+  {
+    total-nfts: (var-get total-supply),
+    active-stakes: (var-get total-staked),
+    treasury-balance: (var-get protocol-treasury),
+    current-block: stacks-block-height,
+  }
+)
