@@ -246,3 +246,106 @@
     (ok true)
   )
 )
+
+;; FRACTIONAL OWNERSHIP SYSTEM  
+
+;; Transfer Fractional Shares - Enable shared ownership of high-value NFTs
+(define-public (transfer-shares
+    (token-id uint)
+    (recipient principal)
+    (share-amount uint)
+  )
+  (let (
+      (sender-shares (unwrap!
+        (map-get? ownership-ledger {
+          token-id: token-id,
+          holder: tx-sender,
+        })
+        ERR_INSUFFICIENT_BALANCE
+      ))
+      (recipient-shares (default-to { share-count: u0 }
+        (map-get? ownership-ledger {
+          token-id: token-id,
+          holder: recipient,
+        })
+      ))
+      (new-recipient-total (unwrap! (safe-add (get share-count recipient-shares) share-amount)
+        ERR_OVERFLOW
+      ))
+    )
+    ;; Transfer validations
+    (asserts! (validate-recipient recipient) ERR_INVALID_RECIPIENT)
+    (asserts! (>= (get share-count sender-shares) share-amount)
+      ERR_INSUFFICIENT_BALANCE
+    )
+
+    ;; Update sender's position
+    (map-set ownership-ledger {
+      token-id: token-id,
+      holder: tx-sender,
+    } { share-count: (- (get share-count sender-shares) share-amount) }
+    )
+
+    ;; Update recipient's position  
+    (map-set ownership-ledger {
+      token-id: token-id,
+      holder: recipient,
+    } { share-count: new-recipient-total }
+    )
+    (ok true)
+  )
+)
+
+;; YIELD FARMING & STAKING
+
+;; Stake NFT for Yield - Lock NFT to earn passive Bitcoin-secured rewards
+(define-public (stake-for-yield (token-id uint))
+  (let ((token-data (unwrap! (map-get? nft-registry { token-id: token-id }) ERR_INVALID_TOKEN)))
+    ;; Staking eligibility checks
+    (asserts! (is-eq tx-sender (get owner token-data)) ERR_NOT_TOKEN_OWNER)
+    (asserts! (not (get is-staked token-data)) ERR_ALREADY_STAKED)
+
+    ;; Initialize staking state
+    (map-set nft-registry { token-id: token-id }
+      (merge token-data {
+        is-staked: true,
+        stake-height: stacks-block-height,
+      })
+    )
+
+    ;; Initialize yield tracking
+    (map-set yield-tracker { token-id: token-id } {
+      accumulated-rewards: u0,
+      last-claim-height: stacks-block-height,
+      total-distributed: u0,
+    })
+
+    ;; Update global staking metrics
+    (var-set total-staked (+ (var-get total-staked) u1))
+    (ok true)
+  )
+)
+
+;; Unstake NFT - Release staked NFT and claim final rewards
+(define-public (release-stake (token-id uint))
+  (let ((token-data (unwrap! (map-get? nft-registry { token-id: token-id }) ERR_INVALID_TOKEN)))
+    ;; Unstaking validations
+    (asserts! (is-eq tx-sender (get owner token-data)) ERR_NOT_TOKEN_OWNER)
+    (asserts! (get is-staked token-data) ERR_NOT_STAKED)
+
+    ;; Claim final rewards before unstaking
+    (try! (claim-yield-rewards token-id))
+
+    ;; Reset staking state
+    (map-set nft-registry { token-id: token-id }
+      (merge token-data {
+        is-staked: false,
+        stake-height: u0,
+      })
+    )
+
+    ;; Update global metrics
+    (var-set total-staked (- (var-get total-staked) u1))
+    (ok true)
+  )
+)
